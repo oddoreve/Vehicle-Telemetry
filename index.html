@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vehicle Telemetry</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: Arial, sans-serif;
+      background: #f3f5f8;
+      color: #202938;
+    }
+    main {
+      max-width: 1100px;
+      margin: auto;
+    }
+    h1 { margin-bottom: 6px; }
+    .subtitle { color: #657084; margin-top: 0; }
+    .status {
+      display: inline-block;
+      margin: 12px 0 20px;
+      padding: 8px 12px;
+      border-radius: 18px;
+      background: #e1e5eb;
+      font-weight: bold;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+    }
+    .card, .chart-card {
+      background: white;
+      padding: 20px;
+      border-radius: 14px;
+      box-shadow: 0 2px 8px #17203312;
+    }
+    .label {
+      color: #657084;
+      font-size: 14px;
+    }
+    .value {
+      font-size: 30px;
+      font-weight: bold;
+      margin-top: 12px;
+      overflow-wrap: anywhere;
+    }
+    .unit {
+      font-size: 14px;
+      color: #657084;
+      font-weight: normal;
+    }
+    .chart-card { margin-top: 18px; }
+    .chart-wrap { height: 300px; }
+    .footer { color: #657084; font-size: 13px; margin-top: 20px; }
+    @media (max-width: 600px) {
+      body { padding: 12px; }
+      .value { font-size: 25px; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Vehicle Telemetry Dashboard</h1>
+  <p class="subtitle">Arduino Uno + Raspberry Pi 4</p>
+  <div id="status" class="status">Waiting for data...</div>
+  <section class="grid">
+    <div class="card">
+      <div class="label">Speed</div>
+      <div class="value"><span id="speed">--</span> <span class="unit">km/h</span></div>
+    </div>
+    <div class="card">
+      <div class="label">Engine RPM (simulated)</div>
+      <div class="value"><span id="rpm">--</span></div>
+    </div>
+    <div class="card">
+      <div class="label">Throttle</div>
+      <div class="value"><span id="throttle">--</span> <span class="unit">%</span></div>
+    </div>
+    <div class="card">
+      <div class="label">Ambient Temperature</div>
+      <div class="value"><span id="temp">--</span> <span class="unit">°C</span></div>
+    </div>
+    <div class="card">
+      <div class="label">Fuel (simulated)</div>
+      <div class="value"><span id="fuel">--</span> <span class="unit">%</span></div>
+    </div>
+  </section>
+  <section class="chart-card">
+    <h2>Recent Telemetry</h2>
+    <p class="subtitle">Up to 120 recent records from the CSV log</p>
+    <div class="chart-wrap">
+      <canvas id="telemetryChart"></canvas>
+    </div>
+  </section>
+  <p id="updated" class="footer">Waiting for the first reading.</p>
+  <p class="footer">
+    Speed, RPM and fuel are simulated. Temperature is ambient temperature,
+    not engine temperature.
+  </p>
+</main>
+<script>
+  const statusEl = document.getElementById("status");
+  const updatedEl = document.getElementById("updated");
+  const chart = new Chart(
+    document.getElementById("telemetryChart"),
+    {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: "Speed (km/h)",
+            data: [],
+            borderWidth: 2,
+            tension: 0.2
+          },
+          {
+            label: "Throttle (%)",
+            data: [],
+            borderWidth: 2,
+            tension: 0.2
+          },
+          {
+            label: "Fuel (%)",
+            data: [],
+            borderWidth: 2,
+            tension: 0.2
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: {
+          intersect: false,
+          mode: "index"
+        },
+        scales: {
+          x: {
+            title: { display: true, text: "Record time" }
+          },
+          y: {
+            beginAtZero: true,
+            title: { display: true, text: "Value" }
+          }
+        }
+      }
+    }
+  );
+  function showValue(id, value, digits = 1) {
+    document.getElementById(id).textContent =
+      Number.isFinite(Number(value))
+        ? Number(value).toFixed(digits)
+        : "--";
+  }
+  async function refreshLatest() {
+    try {
+      const response = await fetch("/api/latest", { cache: "no-store" });
+      if (!response.ok) throw new Error("Latest API request failed");
+      const result = await response.json();
+      if (!result.data) {
+        statusEl.textContent = "Waiting for telemetry";
+        updatedEl.textContent = "Start the Arduino and CSV collector.";
+        return;
+      }
+      const d = result.data;
+      showValue("speed", d.speed, 1);
+      showValue("rpm", d.rpm, 0);
+      showValue("throttle", d.throttle, 1);
+      showValue("temp", d.temp, 1);
+      showValue("fuel", d.fuel, 1);
+      statusEl.textContent = result.online
+        ? "ONLINE"
+        : "OFFLINE — last reading is stale";
+      updatedEl.textContent =
+        "Last record: " + d.timestamp +
+        " | Sequence: " + d.seq +
+        " | Age: " + result.age_seconds + " s";
+    } catch (error) {
+      statusEl.textContent = "Dashboard connection error";
+      updatedEl.textContent = error.message;
+    }
+  }
+  async function refreshHistory() {
+    try {
+      const response = await fetch("/api/history", { cache: "no-store" });
+      if (!response.ok) throw new Error("History API request failed");
+      const rows = await response.json();
+      chart.data.labels = rows.map(row => {
+        const date = new Date(row.timestamp);
+        return date.toLocaleTimeString();
+      });
+      chart.data.datasets[0].data =
+        rows.map(row => row.speed);
+      chart.data.datasets[1].data =
+        rows.map(row => row.throttle);
+      chart.data.datasets[2].data =
+        rows.map(row => row.fuel);
+      chart.update("none");
+    } catch (error) {
+      console.error(error);
+    }
+  }
+  async function refreshAll() {
+    await Promise.all([refreshLatest(), refreshHistory()]);
+  }
+  refreshAll();
+  setInterval(refreshAll, 2000);
+</script>
+</body>
+</html>
